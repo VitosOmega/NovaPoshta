@@ -1,9 +1,9 @@
 import requests
-import psycopg2
+from sqlalchemy import create_engine, ForeignKey, Column, Integer, String, Boolean
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, relationship
 
 
 def is_respond_error(api_data):
-
     error_list = api_data["errors"]
     if len(error_list) > 0:
         print("УВАГА! Виявлені помилки під час запиту: "+str(error_list))
@@ -12,19 +12,44 @@ def is_respond_error(api_data):
         return False
 
 
-def update_areas(url, api_key, conn_db):
-    # створимо таблицю областей в базі, якщо її немає
-    create_table_query = """
-        CREATE TABLE IF NOT EXISTS areas (
-            id SERIAL PRIMARY KEY,
-            Ref CHAR(36) UNIQUE NOT NULL,
-            Description VARCHAR(150),
-            AreasCenter CHAR(36)
-        );
-        """
-    cursor_ar = conn_db.cursor()  # streets
-    cursor_ar.execute(create_table_query)
-    conn_db.commit()
+class Base(DeclarativeBase):
+    id = Column(Integer, autoincrement=True, primary_key=True, nullable=False, unique=True)
+    ref = Column(String(36), unique=True, nullable=False)
+    description = Column(String(150))
+
+
+class Areas(Base):
+    __tablename__ = "areas"
+    areas_center = Column(String(36), nullable=False, index=True)
+
+class Streets(Base):
+    __tablename__ = "streets"
+    streets_type = Column(String(50))
+    city_ref = Column(String(36), ForeignKey("cities.ref"), nullable=False, index=True)
+    city = relationship("Cities")
+
+
+class Cities(Base):
+    __tablename__ = "cities"
+    settlement_type = Column(String(50))
+    area_ref = Column(String(36), ForeignKey("areas.ref"), index=True)
+    area = relationship("Areas")
+
+
+class Settlements(Base):
+    __tablename__ = "settlements"
+    settlement_type = Column(String(50))
+    latitude = Column(String(36))
+    longitude = Column(String(36))
+    regions_description = Column(String(50))
+    area = Column(String(36))
+    area_description = Column(String(50))
+    index1 = Column(String(10))
+    index2 = Column(String(10))
+    warehouse = Column(Boolean)
+
+
+def update_areas():
 
     data = {
         "apiKey": api_key,
@@ -44,40 +69,24 @@ def update_areas(url, api_key, conn_db):
         print(api_object['Description'])
 
         # Спробуємо оновити запис, і якщо він не існує, вставляємо новий рядок
-        update_query = """
-            INSERT INTO areas (Ref, Description, AreasCenter)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (Ref) DO UPDATE
-            SET Description = excluded.Description,
-                AreasCenter = excluded.AreasCenter;
-            """
-        cursor_ar.execute(update_query, (api_object['Ref'], api_object['Description'], api_object['AreasCenter']))
+        row_db = session.query(Areas).filter_by(ref=api_object['Ref']).first()
+        if row_db:
+            row_db.description = api_object['Description']
+            row_db.areas_center = api_object['AreasCenter']
+        else:
+            new_row_db = Areas(ref=api_object['Ref'],
+                               description=api_object['Description'],
+                               areas_center=api_object['AreasCenter'])
+            session.add(new_row_db)
 
-        conn_db.commit()
-
-    cursor_ar.close()
+        session.commit()
 
 
-def update_streets_by_city(url, api_key, conn_db, city_ref):
-    # створимо таблицю вулиць міста в базі, якщо її немає
-    create_table_query = """
-        CREATE TABLE IF NOT EXISTS streets (
-            id SERIAL PRIMARY KEY,
-            Ref CHAR(36) UNIQUE NOT NULL,
-            Description VARCHAR(150),
-            StreetsType VARCHAR(50),
-            CityRef CHAR(36)
-        );
-        """
-    cursor_str = conn_db.cursor()  # streets
-    cursor_str.execute(create_table_query)
-    conn_db.commit()
-
+def update_streets_by_city(city_ref):
     num_page = 1  # запит з обробкою пагінації
     per_page = 100  # кількість об'єктів на сторінці
-
+    q_streets = 0
     while True:
-
         data = {
             "apiKey": api_key,
             "modelName": "Address",
@@ -98,47 +107,30 @@ def update_streets_by_city(url, api_key, conn_db, city_ref):
         if not object_list:
             break  # натрапили на порожній блок даних, завершуємо цикл
 
-        # print(str(num_page) + " - " + str(len(object_list)))
+        q_streets = q_streets + len(object_list)  # підсумок кількості вулиць
         for api_object in object_list:
             # Спробуємо оновити запис, і якщо він не існує, вставляємо новий рядок
-            update_query = """
-            INSERT INTO streets (Ref, Description, StreetsType, CityRef)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (Ref) DO UPDATE
-            SET Description = excluded.Description,
-                StreetsType = excluded.StreetsType,
-                CityRef = excluded.CityRef;
-            """
-            cursor_str.execute(update_query, (api_object['Ref'], api_object['Description'],
-                                              api_object['StreetsType'], city_ref))
+            row_db = session.query(Streets).filter_by(ref=api_object['Ref']).first()
+            if row_db:
+                row_db.description = api_object['Description']
+                row_db.streets_type = api_object['StreetsType']
+                row_db.city_ref = city_ref
+            else:
+                new_row_db = Streets(ref=api_object['Ref'],
+                                     description=api_object['Description'],
+                                     city_ref=city_ref,
+                                     streets_type=api_object['StreetsType'])
+                session.add(new_row_db)
 
-        conn_db.commit()
+        session.commit()
         num_page += 1
 
-    cursor_str.close()
 
-
-def update_cities(url, api_key, conn_db):
-
-    # створимо таблицю міст доставлення в базі, якщо її немає
-    create_table_query = """
-    CREATE TABLE IF NOT EXISTS cities (
-        id SERIAL PRIMARY KEY,
-        Ref CHAR(36) UNIQUE NOT NULL,
-        Description VARCHAR(150),
-        SettlementTypeDescription VARCHAR(50),
-        Area CHAR(36)
-    );
-    """
-    cursor_city = conn_db.cursor()  #
-    cursor_city.execute(create_table_query)
-    conn_db.commit()
-
+def update_cities_streets():
     num_page = 1    # запит з обробкою пагінації
     per_page = 100  # кількість об'єктів на сторінці
 
     while True:
-
         data = {
             "apiKey": api_key,
             "modelName": "Address",
@@ -162,55 +154,33 @@ def update_cities(url, api_key, conn_db):
 
         for api_object in object_list:
             # Спробуємо оновити запис, і якщо він не існує, вставляємо новий рядок
-            update_query = """
-            INSERT INTO cities (Ref, Description, SettlementTypeDescription, Area)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (Ref) DO UPDATE
-            SET Description = excluded.Description,
-                SettlementTypeDescription = excluded.SettlementTypeDescription,
-                Area = excluded.Area;
-            """
-            cursor_city.execute(update_query, (api_object['Ref'], api_object['Description'],
-                                               api_object['SettlementTypeDescription'], api_object['Area']))
+            row_db = session.query(Cities).filter_by(ref=api_object['Ref']).first()
+            if row_db:
+                row_db.description = api_object['Description']
+                row_db.settlement_type = api_object['SettlementTypeDescription']
+                row_db.area_ref = api_object['Area']
+            else:
+                new_row_db = Cities(ref=api_object['Ref'],
+                                    description=api_object['Description'],
+                                    settlement_type=api_object['SettlementTypeDescription'],
+                                    area_ref=api_object['Area'])
+                session.add(new_row_db)
 
-            conn_db.commit()
+            session.commit()
 
-            update_streets_by_city(url, api_key, conn_db, api_object['Ref'])
+            update_streets_by_city(api_object['Ref'])
 
         num_page += 1
+        q_streets = session.query(Streets).count()
+        print("     Оброблено вулиць: " + str(q_streets))
         # if num_page == 2: break
 
-    cursor_city.close()
 
-
-def update_settlements(url, api_key, conn_db):
-
-    # створимо таблицю населених пунктів в базі, якщо її немає
-    create_table_query = """
-    CREATE TABLE IF NOT EXISTS settlements (
-        id SERIAL PRIMARY KEY,
-        Ref CHAR(36) UNIQUE NOT NULL,
-        Description VARCHAR(150),
-        SettlementTypeDescription VARCHAR(50),
-        Latitude VARCHAR(36),
-        Longitude VARCHAR(36),
-        RegionsDescription VARCHAR(50),
-        Area CHAR(36),
-        AreaDescription VARCHAR(50),
-        Index1 VARCHAR(10),
-        Index2 VARCHAR(10),
-        Warehouse BOOLEAN
-    );
-    """
-    cursor_ctw = conn_db.cursor()  # city town village
-    cursor_ctw.execute(create_table_query)
-    conn_db.commit()
-
+def update_settlements():
     num_page = 1    # запит з обробкою пагінації
     per_page = 100  # кількість об'єктів на сторінці
 
     while True:
-
         data = {
             "apiKey": api_key,
             "modelName": "Address",
@@ -234,44 +204,51 @@ def update_settlements(url, api_key, conn_db):
 
         for api_object in object_list:
             # Спробуємо оновити запис, і якщо він не існує, вставляємо новий рядок
-            update_query = """
-            INSERT INTO settlements (Ref, Description, SettlementTypeDescription, Latitude, Longitude, 
-                                        RegionsDescription, Area, AreaDescription, Index1, Index2, Warehouse)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (Ref) DO UPDATE
-            SET Description = excluded.Description,
-                SettlementTypeDescription = excluded.SettlementTypeDescription,
-                Latitude = excluded.Latitude,
-                Longitude = excluded.Longitude,
-                RegionsDescription = excluded.RegionsDescription,
-                Area = excluded.Area,
-                AreaDescription = excluded.AreaDescription,
-                Index1 = excluded.Index1,
-                Index2 = excluded.Index2,
-                Warehouse = excluded.Warehouse;
-            """
-            cursor_ctw.execute(update_query, (api_object['Ref'],
-                                              api_object['Description'], api_object['SettlementTypeDescription'],
-                                              api_object['Latitude'], api_object['Latitude'],
-                                              api_object['RegionsDescription'], api_object['Area'], api_object['AreaDescription'],
-                                              api_object['Index1'], api_object['Index2'], api_object['Warehouse']))
+            row_db = session.query(Settlements).filter_by(ref=api_object['Ref']).first()
+            if row_db:
+                row_db.description = api_object['Description']
+                row_db.settlement_type = api_object['SettlementTypeDescription']
+                row_db.latitude = api_object['Latitude']
+                row_db.longitude = api_object['Longitude']
+                row_db.regions_description = api_object['RegionsDescription']
+                row_db.area = api_object['Area']
+                row_db.area_description = api_object['AreaDescription']
+                row_db.index1 = api_object['Index1']
+                row_db.index2 = api_object['Index2']
+                row_db.warehouse = bool(int(api_object['Warehouse']))
+            else:
+                new_row_db = Settlements(ref=api_object['Ref'],
+                                         description=api_object['Description'],
+                                         settlement_type=api_object['SettlementTypeDescription'],
+                                         latitude=api_object['Latitude'],
+                                         longitude=api_object['Longitude'],
+                                         regions_description=api_object['RegionsDescription'],
+                                         area=api_object['Area'],
+                                         area_description=api_object['AreaDescription'],
+                                         index1=api_object['Index1'],
+                                         index2=api_object['Index2'],
+                                         warehouse=bool(int(api_object['Warehouse'])))
+                session.add(new_row_db)
 
-        conn_db.commit()
+        session.commit()
         num_page += 1
         # if num_page == 2: break
 
-    cursor_ctw.close()
-
 
 if __name__ == '__main__':
-
-    conn_db = psycopg2.connect(host="localhost", dbname="novaposhta", user="postgres", password="94027", port="5432")
+    # dialect+driver://username:password@host:port/database
+    engine = create_engine("postgresql+psycopg2://postgres:94027@localhost:5432/novaposhta")
+    # створення сесії для роботи з базою даних
+    Session = sessionmaker(bind=engine)
+    session = Session()
 
     url = "https://api.novaposhta.ua/v2.0/json/"
     api_key = "0362f092a5fcc0dbd0bd516d6862ffb7"
 
-    update_areas(url, api_key, conn_db)
-    update_settlements(url, api_key, conn_db)
-    update_cities(url, api_key, conn_db)
+    Base.metadata.create_all(engine)  # створення таблиць які успадкувались від об'єкта Base
 
-    conn_db.close()
+    update_areas()
+    update_settlements()
+    update_cities_streets()
+
+    session.close()
